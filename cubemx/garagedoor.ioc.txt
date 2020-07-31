@@ -1,0 +1,17 @@
+Configuration	garagedoor.ioc
+STM8CubeMX 	1.5.0
+Date	07/28/2020
+MCU	STM8S003F3Px
+
+
+
+PERIPHERALS	MODES	FUNCTIONS	PINS
+SYS	SWIM Input and Output	SYS_SWIM	PD1
+
+
+
+Pin Nb	PINs	FUNCTIONs	LABELs
+1	PD4	GPIO_Input	Button
+18	PD1	SYS_SWIM	
+19	PD2	GPIO_Output	LED_low
+20	PD3	GPIO_Output	LED_high
