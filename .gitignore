@@ -1,0 +1,9 @@
+firmware.dep
+firmware.pdb
+checkres.spy
+firmware.wdb
+firmware.wed
+Debug/
+Release/
+license.lic
+PDFs/
