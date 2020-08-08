@@ -5,11 +5,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-
 #include <iostm8s003.h>
-
-#define PORTD_ADDR         ((uint8_t*)(0x500F))
-#define PORTD_DATADIR_ADDR ((uint8_t*)(0x5011))
 
 
 #define BLUE_LED_PIN      (1 << 2)
@@ -41,12 +37,24 @@ bool Sensor_closed;
 bool Sensor_open;
 bool Time_passed;
 
+#define BLUE_LED_ON()   BLUE_LED_PORT &= ~BLUE_LED_PIN
+#define BLUE_LED_OFF()  BLUE_LED_PORT |=  BLUE_LED_PIN
+
+#define RED_LED_ON()    RED_LED_PORT &= ~RED_LED_PIN
+#define RED_LED_OFF()   RED_LED_PORT |=  RED_LED_PIN
+
+#define LED_OFF()       (BLUE_LED_PORT |=  RED_LED_PIN | BLUE_LED_PIN)
+
+#define GET_SENSOR()  (DOOR_SENSOR_PORT & DOOR_SENSOR_PIN)
+#define GET_SENSOR_BOOL()  (!!(GET_SENSOR()))
+
 void main()
 {
     int i;
     int j;
 
-    PD_DDR |= BLUE_LED_PIN;
+    LED_OFF();
+    PD_DDR     |= BLUE_LED_PIN | RED_LED_PIN;
 
     for (;;)
     {
@@ -54,16 +62,34 @@ void main()
         {
             for (j = 0; j < 255; j++)
             {
-                if (j < i)
+                if (j < i && GET_SENSOR())
                 {
-                    *PORTD_ADDR |= BLUE_LED_PIN;
+									BLUE_LED_ON();
                 }
                 else
                 {
-                    *PORTD_ADDR &= ~BLUE_LED_PIN;
+                    BLUE_LED_OFF();
                 }
             }
         }
+				LED_OFF();
+#if 1			
+        for (i = 0; i < 255; i++)
+        {
+            for (j = 0; j < 255; j++)
+            {
+                if (j*8 < i)
+                {
+                    RED_LED_ON();
+                }
+                else
+                {
+                    RED_LED_OFF();
+                }
+            }
+        }
+				LED_OFF();
+#endif
     }
 
     {
