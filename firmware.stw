@@ -6,7 +6,3 @@ Keyword=ST7Workspace-V0.7
 [Project0]
 Filename=firmware.stp
 Dependencies=
-[Options]
-ActiveProject=firmware
-ActiveConfig=Debug
-AddSortedElements=1
