@@ -100,15 +100,13 @@ bool FirstTime(void)
 ////////      STATE MACHINE LOGIC  ///////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
-//#define GARAGE_DOOR_CLOSING_TIME 10
-//#define GARAGE_DOOR_LET_OPEN_TIME 120
-#define GARAGE_DOOR_CLOSING_TIME 3
-#define GARAGE_DOOR_LET_OPEN_TIME 5
+#define GARAGE_DOOR_CLOSING_TIME    20 /* Actual time: 13.7s */
+#define GARAGE_DOOR_LET_OPEN_TIME (120 + GARAGE_DOOR_CLOSING_TIME)
 
-#define RELAY_TIME_CLOSE 1
+#define RELAY_TIME_CLOSE 1          /* Original firmware uses about 3 */
 
 #define CLOSE_RETIRES_MAX       3
-static int close_retries;
+static int close_attempts_remaining;
 
 int State_WatchDoor()
 {
@@ -159,7 +157,7 @@ static int State_Door_Opening(void)
     {
         return (int)State_Idle;
     }
-    return (int)State_Open_Command;
+    return (int)State_Door_Opening;
 }
 
 int State_OpenError()
@@ -172,9 +170,15 @@ int State_OpenError()
 
 int State_Idle()
 {
+    if (FirstTime())
+    {
+        RxCommand_close = false;
+        RxCommand_open = false;
+    }
+
     if (RxCommand_close)
     {
-        close_retries = CLOSE_RETIRES_MAX;
+        close_attempts_remaining = CLOSE_RETIRES_MAX;
         return (int)State_Close_Command;
     }
     if (Sensor_closed)
@@ -197,7 +201,7 @@ int State_Wait2Minutes()
     }
     if (IsTimePassed())
     {
-        close_retries = CLOSE_RETIRES_MAX;
+        close_attempts_remaining = CLOSE_RETIRES_MAX;
         return (int)State_Close_Command;
     }
     return (int)State_Wait2Minutes;
@@ -232,9 +236,9 @@ int State_Door_Closing()
     }
     if (IsTimePassed())
     {
-        if (close_retries > 0)
+        if ((close_attempts_remaining-1) > 0) // -1 for the one already happened
         {
-            close_retries--;
+            close_attempts_remaining--;
             return (int)State_Close_Command;
         }
         else
@@ -287,6 +291,19 @@ void RED_LED_BLINK(void)
     }
 }
 
+void RED_LED_BLINK_SLOW(void)
+{
+    if ((get_milliseconds_now() % BLINK_FREQ_MS) > (BLINK_FREQ_MS*0.9))
+    {
+        RED_LED_ON();
+    }
+    else
+    {
+        RED_LED_OFF();
+    }
+}
+
+
 void PINK_LED_ON(void)
 {
     char t = get_milliseconds_now() % 3;
@@ -328,14 +345,18 @@ void LedTask(void)
         BLUE_LED_OFF();
         RED_LED_ON();
     }
-    else if (state == State_Door_Closing)
+    else if (state == State_Door_Closing || state == State_Door_Opening)
     {
         BLUE_LED_BLINK();
     }
-    else if (state == State_CloseError)
+    else if (state == State_CloseError || state == State_OpenError)
     {
         PINK_LED_ON();
     }    
+    else if (state == State_Idle)
+    {
+        RED_LED_BLINK_SLOW();
+    }
     else
     {
         LED_OFF();
