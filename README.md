@@ -14,6 +14,13 @@ Here's how to connect the JTAG.
 - STLINK v2: (from Left to Right, where the ST logo, LED, and USB cables are facing you)
   - (Use the STM8 port)
   - Blue, Black, Green, Red
+  - Tip: If you want to supply power from STLINK, you can do so by connecting the STM32 port to power: 
+     - VCC and GND of STM8 and STM32 are connected.
+     - Use a 3.3v power supply
+     - Black is top/right of STM32 pin header
+     - Red is bottom/left of STM32 pin header
+     - Note that the relay is on a different power rail that you're not powering.
+     - I wouldn't recommend debugging while the unit is connected to mains power! I didn't try it. 
 
 - The board: (from Left to Right, where the board is facing up, and the relay is facing you, and the wifi module is facing away from you)
   - (Use J1)
