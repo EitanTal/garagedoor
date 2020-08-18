@@ -3,6 +3,7 @@
 #include <iostm8s003.h>
 #include "MyPeripherals.h"
 #include "time.h"
+#include "tuya.h"
 
 #define INTERRUPT_EN()   __asm("RIM")
 #define INTERRUPT_DIS()  __asm("SIM")
@@ -22,7 +23,6 @@ int (*state)(void) = State_WatchDoor;
 
 /// Tasks...
 static void LedTask(void);
-static void UartTask(void);
 static void SensorTask(void);
 static void ButtonTask(void);
 
@@ -46,12 +46,19 @@ void setup()
 {
     // GPIOs
     LED_OFF();
-    PD_DDR  |= (BLUE_LED_PIN | RED_LED_PIN);
+    PD_ODR  |= UART_TX_PIN;
+    PD_DDR  |= (BLUE_LED_PIN | RED_LED_PIN | UART_TX_PIN);
     PC_DDR  |= DOOR_SWITCH_PIN;
     PC_CR1  |= DOOR_SWITCH_PIN;
-
+#if 1
+    PD_CR1  |= (UART_TX_PIN ); // also UART_RX_PIN ?
+#else    
+    PD_CR1  |= (UART_TX_PIN | UART_RX_PIN);
+    PD_CR2  |= (UART_TX_PIN | UART_RX_PIN);
+#endif
     TimersSetup();
-    INTERRUPT_EN();    
+    UartSetup();
+    INTERRUPT_EN();
 }
 
 void main()
@@ -75,7 +82,8 @@ void EnterStateMachine()
     {
         next = state();
         LedTask();
-        UartTask();
+        RxTask();
+        TxTask();
         SensorTask();
         ButtonTask();
         if (next != (int)state)
@@ -112,6 +120,7 @@ int State_WatchDoor()
 {
     if (FirstTime())
     {
+        StatusReport(false,1); // !
         RxCommand_open = false;
     }
 
@@ -174,6 +183,7 @@ int State_Idle()
     {
         RxCommand_close = false;
         RxCommand_open = false;
+        StatusReport(true,1); // !
     }
 
     if (RxCommand_close)
@@ -192,6 +202,7 @@ int State_Wait2Minutes()
 {
     if (FirstTime())
     {
+        StatusReport(true,1); // !
         SetNotification(GARAGE_DOOR_LET_OPEN_TIME);
     }
 
@@ -363,13 +374,9 @@ void LedTask(void)
     }
 }
 
-void UartTask(void)
-{
-}
-
 void SensorTask(void)
 {
-    // TODO: Debounce plz
+    // TODO: Debounce plz and report status
     if (GET_SENSOR()) // == 1 when open
     {
         Sensor_closed = false;
