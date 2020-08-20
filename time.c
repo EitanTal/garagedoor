@@ -82,12 +82,17 @@ void SetNotification(int seconds_in_future)
 
 int get_milliseconds_now(void)
 {
-    return TIM1_CNTRL | TIM1_CNTRH << 8;
+    // ! must be read in this order!
+    uint8_t a = TIM1_CNTRH;
+    uint8_t b = TIM1_CNTRL;
+    
+    uint16_t val = (a << 8) | b;
 }
 
 int get_milliseconds_since(int when)
 {
     int now = get_milliseconds_now();
+
     int diff = now - when;
     if (diff < 0) diff += TIM1_AUTO_RELOAD;
     return diff;

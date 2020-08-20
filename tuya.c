@@ -20,34 +20,45 @@ enum
     OPCODE_QUERY_PRODUCT_INFO = 0x01,
     OPCODE_QUERY_MCU = 0x02,
     OPCODE_REPORT_NETWORK_STATUS = 0x03,
+    OPCODE_RESET_WIFI = 0x04,
+    OPCODE_SET_PAIRING_MODE = 0x05,
     OPCODE_COMMAND = 0x06,
     OPCODE_STATUS = 0x07,
     OPCODE_QUERY_STATUS = 0x08
 };
 
-typedef struct 
+enum
 {
-    uint8_t dpid; // datapoint id
-    uint8_t type; // type. always use type=1 for bool
-    uint8_t len_h; // always 0
-    uint8_t len_l; // always 1
-    uint8_t value; // Value of the door sensor. 1 = open/opening, 0 = closed.
-} S_TUYA_DATA;
+    TUYA_TYPE_BOOL = 0x01,
+    TUYA_TYPE_UINT32 = 0x02
+};
 
 typedef struct 
 {
-    uint8_t dpid; // datapoint id
-    uint8_t type; // type. 2 for uint32_t
+    uint8_t dpid; // datapoint id.
+    uint8_t type; // type: type=1 for bool
+    uint8_t len_h; // always 0
+    uint8_t len_l; // always 1
+    uint8_t value; // Value of the door sensor. 1 = open/opening, 0 = closed.
+} S_TUYA_DATA_BOOL;
+
+typedef struct 
+{
+    uint8_t dpid; // datapoint id.
+    uint8_t type; // type 2 for uint32_t
     uint8_t len_h; // always 0
     uint8_t len_l; // always 4
-    uint32_t value; // Value (???)
-} S_TUYA_DATA_EX;
+    uint32_t value; // Value (of what??)
+} S_TUYA_DATA_UINT32;
 
 static uint8_t ChksumByte = 0;
 static uint8_t TxBufferLen = 0;
 static uint8_t TxBuffer[70];
 static uint8_t first_heartbeat = 0;
 static uint8_t lastKnownDoorState = 0;
+static uint8_t pairingMode = 0;
+
+bool wifiResetInProgress = 0;
 
 //////////////////////////////////////////////////////////////////////
 
@@ -61,12 +72,14 @@ static void QueryMCU(void);
 static void ReportModeAck(void);
 static void Process(uint8_t opcode, uint8_t *data);
 static void StatusReport_Ex(void);
+static void UnkownOpcode(uint8_t opcode);
+static void RequestPairingMode(uint8_t mode);
 
 //////////////////////////////////////////////////////////////////////
 
 void UartSetup()
 {
-    // baud:
+    // Set baud registers:
     const int baud = 9600;
     const uint32_t master_freq = 2000000;
     const uint16_t uart_div = master_freq / baud;
@@ -81,8 +94,6 @@ void UartSetup()
 void TxTask()
 {
     static uint8_t TxBufferIndex = 0;
-    // Do I care about break?
-    //if (UART1_CR4 | 0x10) {...}
     
     if ((UART1_SR & UART1_SR_TXE) && TxBufferIndex < TxBufferLen)
     {
@@ -128,21 +139,18 @@ void TxCString(char* buffer)
     }
 }
 
-void UnkownOpcode(uint8_t opcode);
-
 void StatusReport(bool isOpen, uint8_t dpid)
 {
-    S_TUYA_DATA d = {0x01, 0x01, 0x00, 0x01, 0x01};
+    S_TUYA_DATA_BOOL d;
     lastKnownDoorState = isOpen;
-#if 0
-    d.dpid = 0x65; // If reporting first time
-#endif
     
     if (!first_heartbeat) return;
 
-    // If sensor shows the door is closed: 0x00.
-    d.value = isOpen ? 0x01 : 0x00;
     d.dpid = dpid;
+    d.len_h = 0;
+    d.len_l = sizeof(uint8_t);
+    d.type = TUYA_TYPE_BOOL;
+    d.value = isOpen ? 0x01 : 0x00; // If sensor shows the door is closed: 0x00.
 
     Tx(TUYA_HEADER_1);
     Tx(TUYA_HEADER_2);
@@ -154,12 +162,41 @@ void StatusReport(bool isOpen, uint8_t dpid)
     TxChksum();
 }
 
+void WifiReset(uint8_t mode)
+{
+    pairingMode = mode;
+    Tx(TUYA_HEADER_1);
+    Tx(TUYA_HEADER_2);
+    Tx(TUYA_VERSION);
+    Tx(OPCODE_RESET_WIFI);
+    Tx(0);
+    Tx(0);
+    TxChksum();
+
+    // Pairing mode will be set later.
+    wifiResetInProgress = true;
+}
+
+void RequestPairingMode(uint8_t mode)
+{
+    pairingMode = mode;
+    Tx(TUYA_HEADER_1);
+    Tx(TUYA_HEADER_2);
+    Tx(TUYA_VERSION);
+    Tx(OPCODE_SET_PAIRING_MODE);
+    Tx(0);
+    Tx(sizeof(mode));
+    Tx(mode);
+    TxChksum();
+    
+}
+
 void StatusReport_Ex()
 {
-    S_TUYA_DATA_EX d;
-    d.dpid = 7; // datapoint id
-    d.type = 2; // type. 2 for uint32_t
-    d.len_h = 0; // always 0
+    S_TUYA_DATA_UINT32 d;
+    d.dpid = 7; // This is the datapoint id the stock firmware reports.
+    d.type = TUYA_TYPE_UINT32;
+    d.len_h = 0;
     d.len_l = sizeof(d.value);
     d.value = 0; // Value (???)
     Tx(TUYA_HEADER_1);
@@ -188,9 +225,8 @@ void HeartBeat(void)
 
 void QueryProductInfo(void)
 {
-    #define PRODUCT_STATUS  "{\"p\":\"REDACTEDREDACTED\",\"v\":\"1.0.0\",\"m\":0}"
-    const char* product_info = PRODUCT_STATUS;
-    const uint8_t product_info_len = sizeof(PRODUCT_STATUS)-1;
+    #define SAMPLE_PRODUCT_INFO  "{\"p\":\"REDACTEDREDACTED\",\"v\":\"1.0.0\",\"m\":0}"
+    const uint8_t product_info_len = sizeof(SAMPLE_PRODUCT_INFO)-1;
     char* key = (char*)0x9A58; // This is where the key is located in the stock firmware.
 
     Tx(TUYA_HEADER_1);
@@ -199,7 +235,7 @@ void QueryProductInfo(void)
     Tx(OPCODE_QUERY_PRODUCT_INFO);
     Tx(0);
     Tx(product_info_len);
-    //TxBytes(product_info,product_info_len);
+
     TxCString("{\"p\":");
     TxCString("\"");
     TxCString(key);
@@ -247,7 +283,7 @@ void Process(uint8_t opcode, uint8_t *data)
 
         case OPCODE_COMMAND:
         {
-            S_TUYA_DATA* d = (S_TUYA_DATA*)data;
+            S_TUYA_DATA_BOOL* d = (S_TUYA_DATA_BOOL*)data;
             if (d->value == 1) RxCommand_open = true;
             if (d->value == 0) RxCommand_close = true;
         }
@@ -267,8 +303,8 @@ void Process(uint8_t opcode, uint8_t *data)
 
         case OPCODE_QUERY_STATUS:
         {
-            StatusReport(lastKnownDoorState, 1); // !
-            StatusReport_Ex(); // !
+            StatusReport(lastKnownDoorState, 1);
+            StatusReport_Ex(); // Must send this dummy data, or else this doesn't work.
         }
         break;
 
@@ -278,6 +314,16 @@ void Process(uint8_t opcode, uint8_t *data)
         }
         break;
         
+        case OPCODE_RESET_WIFI:
+        {
+            RequestPairingMode(pairingMode);
+        }
+        break;
+
+        case OPCODE_SET_PAIRING_MODE:
+            wifiResetInProgress = false; // This is an ACK.
+        break;
+
         default:
         {
             UnkownOpcode(opcode);
@@ -305,22 +351,11 @@ void RxTask(void)
     static uint8_t msgLen;
     static uint8_t data[6];
     static uint8_t dataIndex;
-#if 0    
-    static uint8_t rxringbuf[16];
-    static uint8_t rxringbuf_index;
-#endif
+
     if (UART1_SR & UART1_SR_RXNE)
     {
         uint8_t rx = UART1_DR;
         UART1_SR &= ~UART1_SR_RXNE;
-#if 0        
-        rxringbuf[rxringbuf_index] = rx;
-        rxringbuf_index = (rxringbuf_index + 1);
-        if (rxringbuf_index == 16)
-        {
-            rxringbuf_index = 0;
-        }
-#else
         switch (state)
         {
             case HDR_BYTE_1: 
@@ -414,6 +449,5 @@ void RxTask(void)
                 }
                 break;
         }
-#endif
     }
 }

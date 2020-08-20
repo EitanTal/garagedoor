@@ -50,12 +50,9 @@ void setup()
     PD_DDR  |= (BLUE_LED_PIN | RED_LED_PIN | UART_TX_PIN);
     PC_DDR  |= DOOR_SWITCH_PIN;
     PC_CR1  |= DOOR_SWITCH_PIN;
-#if 1
-    PD_CR1  |= (UART_TX_PIN ); // also UART_RX_PIN ?
-#else    
-    PD_CR1  |= (UART_TX_PIN | UART_RX_PIN);
-    PD_CR2  |= (UART_TX_PIN | UART_RX_PIN);
-#endif
+    PD_CR1  |= (UART_TX_PIN ); 
+
+    // Others
     TimersSetup();
     UartSetup();
     INTERRUPT_EN();
@@ -65,6 +62,7 @@ void main()
 {
     setup();
 
+    // Test that notification function works:
     RED_LED_ON();
     SetNotification(0);
     while (!IsTimePassed());
@@ -120,7 +118,8 @@ int State_WatchDoor()
 {
     if (FirstTime())
     {
-        StatusReport(false,1); // !
+        StatusReport(false,0x65); // 0x65 sends alarm/notification
+        StatusReport(false,1);
         RxCommand_open = false;
     }
 
@@ -183,7 +182,8 @@ int State_Idle()
     {
         RxCommand_close = false;
         RxCommand_open = false;
-        StatusReport(true,1); // !
+        StatusReport(true,0x65); // 0x65 sends alarm/notification
+        StatusReport(true,1);
     }
 
     if (RxCommand_close)
@@ -202,7 +202,9 @@ int State_Wait2Minutes()
 {
     if (FirstTime())
     {
-        StatusReport(true,1); // !
+        RxCommand_close = false;
+        StatusReport(true,0x65); // 0x65 sends alarm/notification
+        StatusReport(true,1);
         SetNotification(GARAGE_DOOR_LET_OPEN_TIME);
     }
 
@@ -210,7 +212,7 @@ int State_Wait2Minutes()
     {
         return (int)State_WatchDoor;
     }
-    if (IsTimePassed())
+    if (IsTimePassed() || RxCommand_close)
     {
         close_attempts_remaining = CLOSE_RETIRES_MAX;
         return (int)State_Close_Command;
@@ -318,28 +320,38 @@ void RED_LED_BLINK_SLOW(void)
 void PINK_LED_ON(void)
 {
     char t = get_milliseconds_now() % 3;
-    if (t == 0)
+    if (t == 0) // 33% of the time
     {
         RED_LED_ON();
         BLUE_LED_OFF();
     }
-#if 0		
-    else if (t == 1)
-    {
-        RED_LED_OFF();
-        BLUE_LED_OFF();
-    }
-#endif
-    else
+    else // 67% of the time
     {
         RED_LED_OFF();
         BLUE_LED_ON();
     }
 }
 
+void PINK_LED_BLINK(void)
+{
+    char t = get_milliseconds_now() % 100;
+    if (t > 50)
+    {
+        PINK_LED_ON();
+    }
+    else
+    {
+        LED_OFF();
+    }
+}
+
 void LedTask(void)
 {
-    if (state == State_WatchDoor)
+    if (wifiResetInProgress)
+    {
+        PINK_LED_BLINK();
+    }
+    else if (state == State_WatchDoor)
     {
         BLUE_LED_ON();
         if (Lockdown)
@@ -358,14 +370,16 @@ void LedTask(void)
     }
     else if (state == State_Door_Closing || state == State_Door_Opening)
     {
+        RED_LED_OFF();
         BLUE_LED_BLINK();
     }
     else if (state == State_CloseError || state == State_OpenError)
     {
         PINK_LED_ON();
-    }    
+    }
     else if (state == State_Idle)
     {
+        BLUE_LED_OFF();
         RED_LED_BLINK_SLOW();
     }
     else
@@ -376,7 +390,7 @@ void LedTask(void)
 
 void SensorTask(void)
 {
-    // TODO: Debounce plz and report status
+    // The sensor doesn't seem to need any debouncing.
     if (GET_SENSOR()) // == 1 when open
     {
         Sensor_closed = false;
@@ -396,7 +410,9 @@ void Event_ButtonPressedShort()
 
 void Event_ButtonPressedLong()
 {
-    
+    static int pairing_mode = 0;
+    WifiReset(pairing_mode);
+    pairing_mode = !pairing_mode;
 }
 
 void ButtonTask(void)
@@ -405,6 +421,10 @@ void ButtonTask(void)
     static int lastDebounceTime = 0;
     static char last_button_temp_status = 0;
     static char last_button_status;
+    static uint8_t button_longpress_countdown;
+    static int button_longpress_starttime = 0;
+    bool isStable;
+    bool change;
 
     enum
     {
@@ -415,30 +435,46 @@ void ButtonTask(void)
     // read the state of the switch into a local variable:
     char reading = GET_BUTTON();
 
-    // check to see if you just pressed the button
-    // (i.e. the input went from LOW to HIGH), and you've waited long enough
-    // since the last press to ignore any noise:
-
     // If the switch changed, due to noise or pressing:
     if (reading != last_button_temp_status) {
-    // reset the debouncing timer
+        // reset the debouncing timer
         lastDebounceTime = get_milliseconds_now();
         // save the reading. Next time through the loop, it'll be the lastButtonState:
-        last_button_temp_status = reading;        
+        last_button_temp_status = reading;
+        button_longpress_countdown = 0;
+        button_longpress_starttime = get_milliseconds_now();
     }
 
-    if (get_milliseconds_since(lastDebounceTime) > DEBOUNCE_DELAY_MS) {
-        // whatever the reading is at, it's been there for longer than the debounce
-        // delay, so take it as the actual current state:
+    // Button is considered stable if it maintained its status for X ms.
+    isStable = (get_milliseconds_since(lastDebounceTime) > DEBOUNCE_DELAY_MS);
+    if (!isStable) return;
 
-        // if the button state has changed:
-        if (reading != last_button_status) {
-            last_button_status = reading;
+    // determine if the button state has just changed:
+    change = false;
+    if (reading != last_button_status) {
+        last_button_status = reading;
+        change = true;
+    }
 
-            // only toggle the LED if the new button state is HIGH
-            if (last_button_status == BUTTON_DOWN) {
-                Event_ButtonPressedShort();
-            }
+    // Button pressed down event:
+    if (change && (last_button_status == BUTTON_DOWN))
+    {
+        Event_ButtonPressedShort();
+    }
+
+    // 
+    if (reading == BUTTON_DOWN)
+    {
+        if (get_milliseconds_since(button_longpress_starttime) > 100)
+        {
+            button_longpress_starttime = get_milliseconds_now();
+            button_longpress_countdown++;
+        }
+
+        if ((last_button_status == BUTTON_DOWN) && (button_longpress_countdown > 30))
+        {
+            button_longpress_countdown = 0;
+            Event_ButtonPressedLong();
         }
     }
 }
